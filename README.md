@@ -1,4 +1,4 @@
-# rl-trainsfer-learning
+# rl-transfer-learning
 
 ## installation
 
