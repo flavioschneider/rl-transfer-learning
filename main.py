@@ -11,6 +11,7 @@ GAMMA = 0.99 # Discount rate
 ALPHA = 0.1 # Update rate
 EPSILON = 0.1 # Exploration factor (epsilon-greedy)
 BETA = 10 # Softmax inverse temperature, set to e.g. 50 for max instead of softmax
+MOVECOST = 0.01
 
 
 class DQN(torch.nn.Module):
@@ -35,6 +36,22 @@ class DQN(torch.nn.Module):
         return out
 
 
+def top_row(x, y):
+    return y == 0
+
+
+def right_column(x, y):
+    return x == 3
+
+
+def bottom_row(x, y):
+    return y == 3
+
+
+def left_column(x, y):
+    return x == 0
+
+
 class MTRL:
     """ Multi-task RL on a toy problem.
         Function Approximator: DQN.
@@ -47,6 +64,79 @@ class MTRL:
         self.Ntrain = len(self.Wtrain)
         self.Wtest = torch.tensor(Wtest)
         self.Ntest = len(self.Wtest)
+
+    def load_dataset_4rooms(self):
+        """ Load MDP = (S, A, T, R) for Dataset 1. """
+
+        self.width = 9
+        self.height = 9
+        self.NS = 68
+        self.NA = 4 # NA = |A|, number of actions
+        self.S = torch.arange(self.width * self.height).reshape(self.width, self.height) # S, set of states
+        self.A = torch.arange(self.NA) # A, set of actions
+        # actions 0, 1, 2, 3 = up, right, down, left
+
+        # T(s,a,s') -- state transition function. (NS, NA, NS) tensor.
+        self.T = torch.zeros(self.NS, self.NA, self.NS)
+        for room in range(4):
+            # room 0: states 0-15
+            # room 1: states 16-31
+            # room 2: states 32-47
+            # room 3: states 48-63
+            for y in range(4):
+                for x in range(4):
+                    # print("s:", room * 16 + x + y * 4, "x:",x,"y:",y)
+                    # action 0: up
+                    if not top_row(x,y):
+                        self.T[room*16 + x + y*4, 0, room*16 + x + (y-1)*4] = 1.
+
+                    # action 1: right
+                    if not right_column(x,y):
+                        self.T[room*16 + x + y*4, 1, room*16 + x+1 + y*4] = 1.
+
+                    # action 2: down
+                    if not bottom_row(x,y):
+                        self.T[room * 16 + x + y * 4, 2, room * 16 + x + (y +1) * 4] = 1.
+
+                    # action 3: left
+                    if not left_column(x,y):
+                        self.T[room * 16 + x + y * 4, 3, room * 16 + x -1 + y * 4] = 1.
+
+                    # print( "T[s]:", self.T[room*16 + x + y*4])
+
+        # rooms 0<->1: door 0 = state 64, actions right,left
+        self.T[64, 1, 20] = 1.
+        self.T[20, 3, 64] = 1.
+        self.T[64, 3, 7] = 1.
+        self.T[7, 1, 64] = 1.
+        # rooms 1<->2: door 1 = state 65, actions up, down
+        self.T[65, 0, 30] = 1.
+        self.T[30, 2, 65] = 1.
+        self.T[65, 2, 34] = 1.
+        self.T[34, 0, 65] = 1.
+        # rooms 2<->3: door 2 = state 66
+        self.T[66, 1, 40] = 1.
+        self.T[40, 3, 66] = 1.
+        self.T[66, 3, 59] = 1.
+        self.T[59, 1, 66] = 1.
+        # rooms 3<->0: door 3 = state 67
+        self.T[67, 0, 13] = 1.
+        self.T[13, 2, 67] = 1.
+        self.T[67, 2, 49] = 1.
+        self.T[49, 0, 67] = 1.
+
+        goal_cell = 0  # goal in cell 0
+        # R(s,a) rewards. (NS,NA) tensor.
+        self.R = torch.zeros(self.NS, self.NA)
+        self.R[1, 3] = 1   # 1,left
+        self.R[4, 0] = 1   # 4,up
+
+        # (NS, ) boolean tensor specifying if state is terminal.
+        self.is_terminal = torch.zeros(self.NS)
+        self.is_terminal[goal_cell] = 1
+        for a in range(4):
+            for s in range(self.NS):
+                self.T[goal_cell, a, s] = 0
 
     def load_dataset_0(self):
         """ Load MDP = (S, A, T, R) for Dataset 1. """
@@ -232,6 +322,43 @@ class MTRL:
         # print(f'VI converged in {count} iterations.')
         return V, pi
 
+    def value_iteration_4rooms(self, threshold=0.01, gamma=GAMMA, beta=BETA):
+        """ Value iteration algorithm. """
+        V = torch.zeros(self.NS)
+        pi = torch.zeros(self.NS, self.NA)
+        for i in range(self.NS):
+            if self.is_terminal[i]:
+                V[i] = 0
+        print("V initialization:", V)
+        delta = torch.tensor([threshold])
+        count = 0
+        while delta >= threshold:
+            delta = torch.tensor([0.])
+            count += 1
+            for s in range(self.NS):
+                oldV = V[s].clone()
+                # print("s:",s, "V:",V,"vals", vals)
+                Q = torch.zeros(self.NA)
+                for a in range(4):
+                    if torch.max(self.T[s, a]) == 0.:
+                        Q[a] = 0.
+                    else:
+                        # print("s:",s,"a:",a)
+                        s_prime = torch.argmax(self.T[s, a])
+                        Q[a] = self.R[s,a] + GAMMA*V[s_prime]
+                        # if Q[a] < 0:
+                        #     Q[a] = 0    # don't move
+
+                # print("T[s]:", self.T[s], "vals:", vals)
+                pi[s] = torch.nn.Softmax(dim=0)(beta * Q)
+                V[s] = torch.max(Q)
+                # print("s:", s, "Q:", Q, "V:",V[s],"oldV:",oldV)
+                delta = max(delta, abs(V[s] - oldV))
+
+            print("iteration",count,"V:",V)
+        print(f'VI converged in {count} iterations.')
+        return V, pi
+
     def uvfa_train(self, npertask=200, epochs=10, bsize=10, gamma=GAMMA, alpha=ALPHA, beta=BETA):
         """ Universal value function approximators. """
         Vtrain = torch.zeros(self.Ntrain, self.NS)
@@ -362,7 +489,6 @@ class MTRL:
         Q = self.T @ ((self.phi @ w) + gamma * vmax)
         pi = torch.nn.Softmax(dim=1)(beta * Q)
         return pi
-
 
 def example():
     """ A working example of an MTRL instance. """
@@ -495,7 +621,18 @@ def plot_results(all_endstates, all_rewards, wall, nstates=13):
     plt.savefig('te3.png')
 
 
-_, all_endstates, all_rewards, wall = simulate_1f()
-plot_results(all_endstates, all_rewards, wall)
-torch.save(all_endstates, 'endstates.pt')
-torch.save(all_rewards, 'rewards.pt')
+wtrain = [[1., 0, 0], [0., 1, 0]]
+wtest = [[1., 1, 0], [0., 0, 1]]
+model = MTRL(wtrain, wtest, load_index='0')
+print("loading 4rooms")
+model.load_dataset_4rooms()
+print("VI 4rooms")
+V, pi = model.value_iteration_4rooms()
+print(V)
+# print(pi)
+
+
+# _, all_endstates, all_rewards, wall = simulate_1f()
+# plot_results(all_endstates, all_rewards, wall)
+# torch.save(all_endstates, 'endstates.pt')
+# torch.save(all_rewards, 'rewards.pt')
