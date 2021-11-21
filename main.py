@@ -5,8 +5,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 import scipy.stats as stats
-import torch.distributions as ds
-
+from torch.distributions import Categorical, MultivariateNormal
 
 GAMMA = 0.99 # Discount rate
 ALPHA = 0.1 # Update rate
@@ -141,8 +140,8 @@ class MTRL:
         """ Execute policy to get reward and final state. """
         state, reward = 0, torch.tensor([0.])
         while not self.is_terminal[state]:
-            action = ds.Categorical(pi[state]).sample()
-            state = ds.Categorical(self.T[state, action, :]).sample()
+            action = Categorical(pi[state]).sample()
+            state = Categorical(self.T[state, action, :]).sample()
             reward += self.phi[state] @ w
         return state, reward
 
@@ -162,7 +161,7 @@ class MTRL:
                 if stats.uniform.rvs() < 1. - eps:
                     actions = Q.argmax(dim=1)
                 action = actions[state]
-                new_state = ds.Categorical(self.T[state, action, :]).sample()
+                new_state = Categorical(self.T[state, action, :]).sample()
                 reward = self.phi[new_state] @ self.Wtrain[k]
                 new_action = actions[new_state]
                 Q[state, action] += alpha * (reward + gamma * Q[new_state, new_action] - Q[state, action])
@@ -198,7 +197,7 @@ class MTRL:
                     actions = current.argmax(dim=1)
                 action = actions[state]
                 current[state,action].backward()
-                new_state = ds.Categorical(self.T[state, action, :]).sample()
+                new_state = Categorical(self.T[state, action, :]).sample()
                 reward = (self.phi[new_state] @ self.Wtrain[k])
                 #output = loss(current[state,action], reward + gamma * old_model[new_state].max(dim=0)[0])
                 for mp in Q.parameters():
@@ -318,7 +317,7 @@ class MTRL:
             wtask = self.Wtrain[widx]
 
             # Sample policies z ~ D(·|w), and get V* and π* for each z.
-            ztasks = ds.MultivariateNormal(wtask, zsigma * torch.eye(self.NP)).sample(torch.Size([nz]))
+            ztasks = MultivariateNormal(wtask, zsigma * torch.eye(self.NP)).sample(torch.Size([nz]))
             zvalues = [self.value_iteration(zt, gamma=gamma, beta=beta) for zt in ztasks]
 
             # Use "policy evaluation" to get the correct Ψ(s,z) for each z. This is the "SF" part.
