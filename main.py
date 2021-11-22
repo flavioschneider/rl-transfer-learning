@@ -1,3 +1,4 @@
+import random
 
 import torch
 import os, time
@@ -7,7 +8,7 @@ import matplotlib.pyplot as plt
 import scipy.stats as stats
 from torch.distributions import Categorical, MultivariateNormal
 
-GAMMA = 0.99 # Discount rate
+GAMMA = 0.9 # Discount rate
 ALPHA = 0.1 # Update rate
 EPSILON = 0.1 # Exploration factor (epsilon-greedy)
 BETA = 10 # Softmax inverse temperature, set to e.g. 50 for max instead of softmax
@@ -77,54 +78,7 @@ class MTRL:
         # actions 0, 1, 2, 3 = up, right, down, left
 
         # T(s,a,s') -- state transition function. (NS, NA, NS) tensor.
-        self.T = torch.zeros(self.NS, self.NA, self.NS)
-        for room in range(4):
-            # room 0: states 0-15
-            # room 1: states 16-31
-            # room 2: states 32-47
-            # room 3: states 48-63
-            for y in range(4):
-                for x in range(4):
-                    # print("s:", room * 16 + x + y * 4, "x:",x,"y:",y)
-                    # action 0: up
-                    if not top_row(x,y):
-                        self.T[room*16 + x + y*4, 0, room*16 + x + (y-1)*4] = 1.
-
-                    # action 1: right
-                    if not right_column(x,y):
-                        self.T[room*16 + x + y*4, 1, room*16 + x+1 + y*4] = 1.
-
-                    # action 2: down
-                    if not bottom_row(x,y):
-                        self.T[room * 16 + x + y * 4, 2, room * 16 + x + (y +1) * 4] = 1.
-
-                    # action 3: left
-                    if not left_column(x,y):
-                        self.T[room * 16 + x + y * 4, 3, room * 16 + x -1 + y * 4] = 1.
-
-                    # print( "T[s]:", self.T[room*16 + x + y*4])
-
-        # rooms 0<->1: door 0 = state 64, actions right,left
-        self.T[64, 1, 20] = 1.
-        self.T[20, 3, 64] = 1.
-        self.T[64, 3, 7] = 1.
-        self.T[7, 1, 64] = 1.
-        # rooms 1<->2: door 1 = state 65, actions up, down
-        self.T[65, 0, 30] = 1.
-        self.T[30, 2, 65] = 1.
-        self.T[65, 2, 34] = 1.
-        self.T[34, 0, 65] = 1.
-        # rooms 2<->3: door 2 = state 66
-        self.T[66, 1, 40] = 1.
-        self.T[40, 3, 66] = 1.
-        self.T[66, 3, 59] = 1.
-        self.T[59, 1, 66] = 1.
-        # rooms 3<->0: door 3 = state 67
-        self.T[67, 0, 13] = 1.
-        self.T[13, 2, 67] = 1.
-        self.T[67, 2, 49] = 1.
-        self.T[49, 0, 67] = 1.
-
+        self.reset_transitions_4rooms()
         goal_cell = 0  # goal in cell 0
         # R(s,a) rewards. (NS,NA) tensor.
         self.R = torch.zeros(self.NS, self.NA)
@@ -137,6 +91,53 @@ class MTRL:
         for a in range(4):
             for s in range(self.NS):
                 self.T[goal_cell, a, s] = 0
+
+    def change_goal_4rooms(self, room=0):
+        """Set a new goal in a random cell of the specified room"""
+        self.reset_transitions_4rooms()
+        goal_cell = random.randint(0, 15)
+        x = goal_cell % 4
+        y = goal_cell // 4
+        self.R = torch.zeros(self.NS, self.NA)
+        if room==0:
+            if x==3 and y==1:
+                self.R[64, 3] = 1
+            elif x==1 and y==3:
+                self.R[67, 0] = 1
+        elif room==1:
+            if x==0 and y==1:
+                self.R[64, 1] = 1
+            elif x==2 and y==3:
+                self.R[65, 0] = 1
+        elif room==2:
+            if x==2 and y==0:
+                self.R[65, 2] = 1
+            elif x==0 and y==2:
+                self.R[66, 0] = 1
+        elif room==3:
+            if x==1 and y== 0:
+                self.R[67, 2] = 1
+            elif x==3 and y==2:
+                self.R[66, 3] = 1
+
+        goal_cell += room * 16
+        if not bottom_row(x,y):
+            self.R[goal_cell+4, 0] = 1
+        if not left_column(x,y):
+            self.R[goal_cell-1, 1] = 1
+        if not top_row(x,y):
+            self.R[goal_cell-4, 2] = 1
+        if not right_column(x,y):
+            self.R[goal_cell+1, 3] = 1
+
+        self.is_terminal = torch.zeros(self.NS)
+        self.is_terminal[goal_cell] = 1
+        for a in range(4):
+            for s in range(self.NS):
+                self.T[goal_cell, a, s] = 0
+
+        return goal_cell
+
 
     def load_dataset_0(self):
         """ Load MDP = (S, A, T, R) for Dataset 1. """
@@ -329,7 +330,7 @@ class MTRL:
         for i in range(self.NS):
             if self.is_terminal[i]:
                 V[i] = 0
-        print("V initialization:", V)
+        # print("V initialization:", V)
         delta = torch.tensor([threshold])
         count = 0
         while delta >= threshold:
@@ -355,8 +356,8 @@ class MTRL:
                 # print("s:", s, "Q:", Q, "V:",V[s],"oldV:",oldV)
                 delta = max(delta, abs(V[s] - oldV))
 
-            print("iteration",count,"V:",V)
-        print(f'VI converged in {count} iterations.')
+            # print("iteration",count,"V:",V)
+        # print(f'VI converged in {count} iterations.')
         return V, pi
 
     def uvfa_train(self, npertask=200, epochs=10, bsize=10, gamma=GAMMA, alpha=ALPHA, beta=BETA):
@@ -389,6 +390,53 @@ class MTRL:
                 optim.step()
             print(f'Epoch {epoch}: {epoch_loss}')
         return UVFN
+
+    def uvfa_train_4rooms(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA):
+        """ Universal value function approximators. """
+
+        UVFN = DQN(isize=self.NS*2, osize=self.NS, hsize=3)
+        optim = torch.optim.Adagrad(UVFN.parameters(), lr=alpha)
+        loss = torch.nn.MSELoss()
+
+        # X = states
+        # Y = goals
+
+        for epoch in range(epochs):
+            epoch_loss = 0.
+            for i in range(bsize):
+                goal_cell = self.change_goal_4rooms(random.randint(0, 2))
+                X = torch.zeros(self.NS)
+                Y = torch.zeros(self.NS)
+                Y[goal_cell] = 1.
+                XY = torch.cat((X.flatten(), Y.flatten()))
+                target, pi = self.value_iteration_4rooms()
+                optim.zero_grad()
+                preds = UVFN(XY)
+                output = loss(preds.squeeze(), target)
+                epoch_loss += output.item()
+                output.backward()
+                optim.step()
+            print(f'Epoch {epoch}: {epoch_loss}')
+        return UVFN
+
+    def uvfa_test_4rooms(self, UVFN, examples=10):
+        loss = torch.nn.MSELoss()
+        total_loss = 0
+        for e in range(examples):
+            goal_cell = self.change_goal_4rooms(3)
+            X = torch.zeros(self.NS)
+            Y = torch.zeros(self.NS)
+            Y[goal_cell] = 1.
+            XY = torch.cat((X.flatten(), Y.flatten()))
+            target, pi = self.value_iteration_4rooms()
+            UVFN.eval()
+            with torch.no_grad():
+                preds = UVFN(XY)
+            total_loss += loss(preds.squeeze(), target).item()
+
+        avg_loss = total_loss / examples
+        print("MSE loss over",examples,"examples:",avg_loss)
+        return avg_loss
 
     def uvfa_predict(self, uvfn, w, gamma=GAMMA, beta=BETA):
         """ Returns optimal policy for a new task. """
@@ -489,6 +537,57 @@ class MTRL:
         Q = self.T @ ((self.phi @ w) + gamma * vmax)
         pi = torch.nn.Softmax(dim=1)(beta * Q)
         return pi
+
+    def reset_transitions_4rooms(self):
+        self.T = torch.zeros(self.NS, self.NA, self.NS)
+        for room in range(4):
+            # room 0: states 0-15
+            # room 1: states 16-31
+            # room 2: states 32-47
+            # room 3: states 48-63
+            for y in range(4):
+                for x in range(4):
+                    # print("s:", room * 16 + x + y * 4, "x:",x,"y:",y)
+                    # action 0: up
+                    if not top_row(x, y):
+                        self.T[room * 16 + x + y * 4, 0, room * 16 + x + (y - 1) * 4] = 1.
+
+                    # action 1: right
+                    if not right_column(x, y):
+                        self.T[room * 16 + x + y * 4, 1, room * 16 + x + 1 + y * 4] = 1.
+
+                    # action 2: down
+                    if not bottom_row(x, y):
+                        self.T[room * 16 + x + y * 4, 2, room * 16 + x + (y + 1) * 4] = 1.
+
+                    # action 3: left
+                    if not left_column(x, y):
+                        self.T[room * 16 + x + y * 4, 3, room * 16 + x - 1 + y * 4] = 1.
+
+                    # print( "T[s]:", self.T[room*16 + x + y*4])
+
+        # rooms 0<->1: door 0 = state 64, actions right,left
+        self.T[64, 1, 20] = 1.
+        self.T[20, 3, 64] = 1.
+        self.T[64, 3, 7] = 1.
+        self.T[7, 1, 64] = 1.
+        # rooms 1<->2: door 1 = state 65, actions up, down
+        self.T[65, 0, 30] = 1.
+        self.T[30, 2, 65] = 1.
+        self.T[65, 2, 34] = 1.
+        self.T[34, 0, 65] = 1.
+        # rooms 2<->3: door 2 = state 66
+        self.T[66, 1, 40] = 1.
+        self.T[40, 3, 66] = 1.
+        self.T[66, 3, 59] = 1.
+        self.T[59, 1, 66] = 1.
+        # rooms 3<->0: door 3 = state 67
+        self.T[67, 0, 13] = 1.
+        self.T[13, 2, 67] = 1.
+        self.T[67, 2, 49] = 1.
+        self.T[49, 0, 67] = 1.
+
+
 
 def example():
     """ A working example of an MTRL instance. """
@@ -629,6 +728,8 @@ model.load_dataset_4rooms()
 print("VI 4rooms")
 V, pi = model.value_iteration_4rooms()
 print(V)
+UVFN = model.uvfa_train_4rooms(epochs=100)
+model.uvfa_test_4rooms(UVFN=UVFN)
 # print(pi)
 
 
