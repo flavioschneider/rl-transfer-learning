@@ -1,5 +1,6 @@
 import random
 
+import numpy
 import torch
 import os, time
 import numpy as np
@@ -720,6 +721,66 @@ def plot_results(all_endstates, all_rewards, wall, nstates=13):
     plt.savefig('te3.png')
 
 
+def vector2grid4rooms(V):
+    matrix = numpy.zeros((9, 9))
+    for v in range(V.shape[0]):
+        room = v // 16
+        if room <= 3:
+            v_inroom = v % 16
+            x = v_inroom % 4
+            y = v_inroom // 4
+            if x==0 and y==0:
+                print("v:",v,"V:",V[v])
+            if room == 0:
+                matrix[x][y] = V[v]
+            elif room == 1:
+                matrix[x+5][y] = V[v]
+            elif room == 2:
+                matrix[x+5][y+5] = V[v]
+            elif room == 3:
+                matrix[x][y+5] = V[v]
+        elif v == 64:
+            matrix[4][1] = V[v]
+        elif v == 65:
+            matrix[7][4] = V[v]
+            # print("7,4:",matrix[7][4])
+        elif v == 66:
+            matrix[4][7] = V[v]
+        elif v == 67:
+            matrix[1][4] = V[v]
+    print(matrix)
+    return matrix
+
+
+
+def plot_4rooms(V):
+    import matplotlib.pyplot as plt
+
+    min_val, max_val = 0, 9
+
+    fig, ax = plt.subplots()
+
+    V = vector2grid4rooms(V)
+    cmap = plt.cm.Blues
+    ax.matshow(V, cmap=plt.cm.Blues)
+
+    for i in range(V.shape[0]):
+        for j in range(V.shape[1]):
+            c = V[j, i]
+            # ax.text(i, j, str(c), va='center', ha='center')
+
+    # ax.set_xlim(min_val, max_val)
+    # ax.set_ylim(min_val, max_val)
+    # ax.set_xticks(np.arange(max_val))
+    # ax.set_yticks(np.arange(max_val))
+    ax.set_yticklabels([])
+    ax.set_xticklabels([])
+    ax.set_xticks([])
+    ax.set_yticks([])
+    # ax.grid()
+    plt.show()
+
+
 wtrain = [[1., 0, 0], [0., 1, 0]]
 wtest = [[1., 1, 0], [0., 0, 1]]
 model = MTRL(wtrain, wtest, load_index='0')
@@ -728,7 +789,8 @@ model.load_dataset_4rooms()
 print("VI 4rooms")
 V, pi = model.value_iteration_4rooms()
 print(V)
-UVFN = model.uvfa_train_4rooms(epochs=100)
+plot_4rooms(V)
+UVFN = model.uvfa_train_4rooms(epochs=1)
 model.uvfa_test_4rooms(UVFN=UVFN)
 # print(pi)
 
