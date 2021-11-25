@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 
 import scipy.stats as stats
 from torch.distributions import Categorical, MultivariateNormal
+from torch.utils.data.dataset import T_co
 
 GAMMA = 0.9 # Discount rate
 ALPHA = 0.1 # Update rate
@@ -15,16 +16,70 @@ EPSILON = 0.1 # Exploration factor (epsilon-greedy)
 BETA = 10 # Softmax inverse temperature, set to e.g. 50 for max instead of softmax
 MOVECOST = 0.01
 
+import wandb
+
+wandb.init(project="rl4rooms", entity="fgossi")
+
+wandb.config = {
+  "epochs": 30000,
+  "learning_rate": 0.005,
+  "hsize": 128,
+  "zerofy": False,
+  "do_clamp": False,
+  "batch_size": 20,
+}
+
+import pytorch_lightning as pl
+from torch.utils.data import DataLoader, Dataset
+
+class DQN_pl(pl.LightningModule):
+    """ Who cares about Bellman equations when you have *deep* neural networks? """
+
+    def __init__(self, isize, osize, lr, hsize=128, zerofy=False, do_clamp=False):
+        """ Instantiates object, defines network architecture. """
+        super().__init__()
+        self.learning_rate = lr
+        self.L1 = torch.nn.Linear(isize, hsize)
+        self.L2 = torch.nn.Linear(hsize, hsize)
+        self.L3 = torch.nn.Linear(hsize, osize)
+        self.relu = torch.nn.ReLU()
+        # self.relu = torch.nn.Sigmoid()
+        self.do_clamp = do_clamp
+        if do_clamp:
+            self.sigmoid = torch.nn.Sigmoid()
+        if zerofy:
+            torch.nn.init.constant_(self.L1.weight, 0.)
+            torch.nn.init.constant_(self.L1.bias, 0.)
+            torch.nn.init.constant_(self.L2.weight, 0.)
+            torch.nn.init.constant_(self.L2.bias, 0.)
+
+    def configure_optimizers(self):
+        return torch.optim.Adagrad(self.parameters(), lr=(self.lr or self.learning_rate))
+
+    def forward(self, X):
+        """ Computes the forward pass. """
+        out = self.relu(self.L1(X))
+        out = self.relu(self.L2(out))
+        out = self.L3(out)
+        if self.do_clamp:
+            out = self.sigmoid(out)
+        return out
+
 
 class DQN(torch.nn.Module):
     """ Who cares about Bellman equations when you have *deep* neural networks? """
 
-    def __init__(self, isize, osize, hsize=50, zerofy=True):
+    def __init__(self, isize, osize, hsize=50, zerofy=True, do_clamp=False):
         """ Instantiates object, defines network architecture. """
         super(DQN, self).__init__()
         self.L1 = torch.nn.Linear(isize, hsize)
-        self.L2 = torch.nn.Linear(hsize, osize)
+        self.L2 = torch.nn.Linear(hsize, hsize)
+        self.L3 = torch.nn.Linear(hsize, osize)
         self.relu = torch.nn.ReLU()
+        # self.relu = torch.nn.Sigmoid()
+        self.do_clamp = do_clamp
+        if do_clamp:
+            self.sigmoid = torch.nn.Sigmoid()
         if zerofy:
             torch.nn.init.constant_(self.L1.weight, 0.)
             torch.nn.init.constant_(self.L1.bias, 0.)
@@ -34,7 +89,19 @@ class DQN(torch.nn.Module):
     def forward(self, X):
         """ Computes the forward pass. """
         out = self.relu(self.L1(X))
-        out = self.L2(out)
+        out = self.relu(self.L2(out))
+        out = self.L3(out)
+        if self.do_clamp:
+            out = self.sigmoid(out)
+        return out
+
+class MultivariateRegression(torch.nn.Module):
+    def __init__(self, isize, hsize, osize, zerofy, do_clamp):
+        super(MultivariateRegression, self).__init__()
+        self.Linear = torch.nn.Linear(isize, osize)
+
+    def forward(self, X):
+        out = self.Linear(X)
         return out
 
 
@@ -52,6 +119,67 @@ def bottom_row(x, y):
 
 def left_column(x, y):
     return x == 0
+
+
+class FourRoomsDataset(Dataset):
+    def __init__(self, MTRL):
+        self.MTRL = MTRL
+
+    def __getitem__(self, index) -> T_co:
+        random_room = random.randint(0, 2)
+        goal_cell = self.MTRL.change_goal_4rooms(random_room)
+        return torch.tensor([goal_cell], dtype=torch.float)
+
+
+def room_goal2xy(random_room, goal_cell):
+    x = goal_cell % 4
+    y = goal_cell // 4
+    if random_room == 1 or random_room == 2:
+        x += 5
+    if random_room == 2 or random_room == 3:
+        y += 5
+    return x, y
+
+
+def state2xy(STATE):
+    state_room = STATE // 16
+    state_cell = STATE % 16
+    state_x = state_cell % 4
+    state_y = state_cell // 4
+    if state_room == 1 or state_room == 2:
+        state_x += 5
+    if state_room == 2 or state_room == 3:
+        state_y += 5
+    elif STATE == 64:
+        state_x = 4
+        state_y = 1
+    elif STATE == 65:
+        state_x = 7
+        state_y = 4
+    elif STATE == 66:
+        state_x = 4
+        state_y = 7
+    elif STATE == 67:
+        state_x = 1
+        state_y = 4
+    return state_x, state_y
+
+
+def xy2polarencoding(x, y):
+    x = torch.Tensor([x])
+    y = torch.Tensor([y])
+    x -= 4
+    y -= 4
+    r = torch.sqrt(x ** 2 + y ** 2)
+    sin = y
+    cos = x
+    return r, sin, cos
+
+
+def state2polarencoding(state):
+    x,y = state2xy(state)
+    r, sin, cos = xy2polarencoding(x,y)
+    return r, sin, cos
 
 
 class MTRL:
@@ -93,12 +221,16 @@ class MTRL:
             for s in range(self.NS):
                 self.T[goal_cell, a, s] = 0
 
-    def change_goal_4rooms(self, room=0):
+    def change_goal_4rooms(self, room=0, goal_cell=-1):
         """Set a new goal in a random cell of the specified room"""
         self.reset_transitions_4rooms()
-        goal_cell = random.randint(0, 15)
+        if goal_cell == -1:
+            goal_cell = random.randint(0, 15)
+        # room = 2
+        # goal_cell = 8
         x = goal_cell % 4
         y = goal_cell // 4
+        # print("x,y:",x,y)
         self.R = torch.zeros(self.NS, self.NA)
         if room==0:
             if x==3 and y==1:
@@ -114,7 +246,7 @@ class MTRL:
             if x==2 and y==0:
                 self.R[65, 2] = 1
             elif x==0 and y==2:
-                self.R[66, 0] = 1
+                self.R[66, 1] = 1
         elif room==3:
             if x==1 and y== 0:
                 self.R[67, 2] = 1
@@ -359,6 +491,9 @@ class MTRL:
 
             # print("iteration",count,"V:",V)
         # print(f'VI converged in {count} iterations.')
+        for i in range(self.NS):
+            if self.is_terminal[i]:
+                V[i] = 1
         return V, pi
 
     def uvfa_train(self, npertask=200, epochs=10, bsize=10, gamma=GAMMA, alpha=ALPHA, beta=BETA):
@@ -392,33 +527,226 @@ class MTRL:
             print(f'Epoch {epoch}: {epoch_loss}')
         return UVFN
 
-    def uvfa_train_4rooms(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA):
+    def uvfa_train_4rooms_pl(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA, hsize=10):
         """ Universal value function approximators. """
 
-        UVFN = DQN(isize=self.NS*2, osize=self.NS, hsize=3)
-        optim = torch.optim.Adagrad(UVFN.parameters(), lr=alpha)
+        UVFN = DQN(isize=1, osize=self.NS, hsize=wandb.config['hsize'],
+                   do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy'],
+                   lr=wandb.config['learning_rate'])
+        # optim = torch.optim.Adam(UVFN.parameters(),lr=wandb.config['learning_rate'])
         loss = torch.nn.MSELoss()
+        wandb.watch(UVFN, log='all', log_freq=1)  # Optional
+        print(UVFN)
+        print(UVFN.parameters())
+
+        # X = states
+        # Y = goals
+        model = UVFN
+        trainer = pl.Trainer(gpus=1)
+
+        train_dataloader = DataLoader(FourRoomsDataset(self))
+
+        # Run learning rate finder
+        lr_finder = trainer.tuner.lr_find(model)
+
+        # Plot with
+        fig = lr_finder.plot(suggest=True)
+        fig.show()
+
+        # Pick point based on plot, or get suggestion
+        new_lr = lr_finder.suggestion()
+
+        # update hparams of the model
+        model.hparams.lr = new_lr
+
+        # Fit model
+        trainer.fit(model, train_dataloader)
+
+        for epoch in range(epochs):
+            epoch_loss = 0.
+            random_room = random.randint(0, 2)
+            goal_cell = self.change_goal_4rooms(random_room)
+            X = torch.zeros(self.NS)
+            Y = torch.zeros(self.NS)
+            Y[goal_cell] = 1.
+            XY = torch.cat((X.flatten(), Y.flatten()))
+            target, pi = self.value_iteration_4rooms()
+
+            # preds = UVFN(XY).squeeze()
+            preds = UVFN(torch.tensor([goal_cell], dtype=torch.float)).squeeze()
+            output = loss(preds, target)
+            # output = torch.mean(torch.exp(10*target)*(preds-target)**2)
+            epoch_loss += output.item()
+            output.backward()
+            optim.step()
+
+            print(f'Epoch {epoch}: {epoch_loss}')
+            wandb.log({"loss": epoch_loss})
+            preds_max = torch.max(preds).item()
+            print("preds max:",preds_max)
+            wandb.log({"predsmax": preds_max})
+            if epoch%9 == 0 and epoch>80:
+                print(f'Plotting epoch {epoch}: {epoch_loss}')
+                # plot_4rooms(target, title='True Epoch'+str(epoch)+' MSE '+str(round(epoch_loss, 4)))
+                # plot_4rooms(preds, title='Predicted Epoch'+str(epoch)+' MSE '+str(round(epoch_loss, 4)))
+        return UVFN
+
+
+    def uvfa_train_4rooms(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA, hsize=10):
+        """ Universal value function approximators. """
+        device = torch.device('cuda')
+        self.device = device
+        UVFN = DQN(isize=self.NS, osize=self.NS, hsize=wandb.config['hsize'],
+                   do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        # UVFN = MultivariateRegression(isize=self.NS, osize=self.NS, hsize=wandb.config['hsize'],
+        #            do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        # UVFN.load_state_dict(torch.load('val158.5459epoch90loss709.4916.pkl'))
+        # optim = torch.optim.Adagrad(UVFN.parameters(), lr=wandb.config['learning_rate'])
+        optim = torch.optim.Adam(UVFN.parameters(),lr=wandb.config['learning_rate'])
+        loss = torch.nn.MSELoss()
+        wandb.watch(UVFN, log='all', log_freq=1)  # Optional
+        print(UVFN)
+        print(UVFN.parameters())
 
         # X = states
         # Y = goals
 
         for epoch in range(epochs):
+            UVFN.train()
             epoch_loss = 0.
-            for i in range(bsize):
-                goal_cell = self.change_goal_4rooms(random.randint(0, 2))
-                X = torch.zeros(self.NS)
+            UVFN.zero_grad()
+            output = 0.
+            for batch in range(bsize):
+                random_room = random.randint(0, 2)
+                goal_cell = self.change_goal_4rooms(random_room)
+                # X = torch.zeros(self.NS)
                 Y = torch.zeros(self.NS)
                 Y[goal_cell] = 1.
-                XY = torch.cat((X.flatten(), Y.flatten()))
+                # XY = torch.cat((X.flatten(), Y.flatten()))
                 target, pi = self.value_iteration_4rooms()
-                optim.zero_grad()
-                preds = UVFN(XY)
-                output = loss(preds.squeeze(), target)
+                # preds = UVFN(XY).squeeze()
+                # preds = UVFN(torch.tensor([goal_cell], dtype=torch.float).to(device)).squeeze()
+                preds = UVFN(Y.to(device)).to(device).squeeze()
+                output = loss(preds.to(device), target.to(device))
+                # output = torch.mean(torch.exp(10*target)*(preds-target)**2)
                 epoch_loss += output.item()
                 output.backward()
-                optim.step()
+            optim.step()
+
             print(f'Epoch {epoch}: {epoch_loss}')
+            wandb.log({"loss": epoch_loss})
+            preds_max = torch.max(preds).item()
+            print("preds max:",preds_max)
+            wandb.log({"predsmax": preds_max})
+            if epoch%9 == 0 and epoch>8:
+                val_mse = self.uvfa_test_4rooms(UVFN)
+                print(f'Plotting epoch {epoch}: {epoch_loss}')
+                plot_4rooms(target, title='True Epoch'+str(epoch)+' MSE '+str(round(output.item(), 4)))
+                plot_4rooms(preds, title='Predicted Epoch'+str(epoch)+' MSE '+str(round(output.item(), 4)))
+                torch.save(UVFN.state_dict(), 'val'+str(round(val_mse, 4))+'epoch'+str(epoch)+'loss'+str(round(epoch_loss, 4))+'.pkl')
         return UVFN
+
+    def uvfa_train_4rooms_1d(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA, hsize=10):
+        """ Universal value function approximators. """
+        device = torch.device('cuda')
+        self.device = device
+        UVFN = DQN(isize=6, osize=1, hsize=wandb.config['hsize'],
+                   do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        # UVFN = MultivariateRegression(isize=self.NS, osize=self.NS, hsize=wandb.config['hsize'],
+        #            do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        # UVFN.load_state_dict(torch.load('val158.5459epoch90loss709.4916.pkl'))
+        # optim = torch.optim.Adagrad(UVFN.parameters(), lr=wandb.config['learning_rate'])
+        optim = torch.optim.Adam(UVFN.parameters(),lr=wandb.config['learning_rate'])
+        loss = torch.nn.MSELoss()
+        wandb.watch(UVFN, log='all', log_freq=1)  # Optional
+        print(UVFN)
+        print(UVFN.parameters())
+
+        print("generating all the value functions for the 64 goals")
+        allV = torch.zeros(64, self.NS).to(device)    # goal x V on all states for that goal
+        for goal in range(64):
+            print("goal:",goal)
+            room = goal // 16
+            self.change_goal_4rooms(room, goal_cell=(goal % 16))
+            V, pi = self.value_iteration_4rooms()
+            allV[goal, :] = V
+        print("training..")
+
+        for epoch in range(epochs):
+            UVFN.train()
+            epoch_loss = 0.
+            UVFN.zero_grad()
+            for batch in range(bsize):
+                random_room = random.randint(0, 2)
+                if random_room == 2:
+                    random_room = 3
+                goal_cell = random.randint(0, 15)
+                x,y=room_goal2xy(random_room, goal_cell)
+                x,y,z = xy2polarencoding(x,y)
+                GOAL = goal_cell + 16*random_room
+                STATE = random.randint(0, self.NS-1)
+                state_x, state_y = state2xy(STATE)
+                state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
+                concat = torch.cat((torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x,state_y,state_z], dtype=torch.float)))
+                # print("concat:",concat)
+                preds = UVFN(concat.to(device)).to(device).squeeze()
+                output = loss(preds.to(device), allV[GOAL, STATE].to(device))
+                # output = torch.mean(torch.exp(10*target)*(preds-target)**2)
+                epoch_loss += output.item()
+                output.backward()
+
+            optim.step()
+
+            # print(f'Epoch {epoch}: {epoch_loss}')
+            wandb.log({"loss": epoch_loss})
+            preds_max = torch.max(preds).item()
+            # print("preds max:",preds_max)
+            wandb.log({"predsmax": preds_max})
+            if (epoch-1)%500 == 0:
+                UVFN.eval()
+                with torch.no_grad():
+                    room = 2
+                    goal_cell = random.randint(0, 15)
+                    goal = goal_cell + 16 * room
+                    targetV = allV[goal, :].to(device)
+                    predV = torch.zeros(self.NS)
+                    x, y = room_goal2xy(room, goal_cell)
+                    x, y, z = xy2polarencoding(x, y)
+                    for state in range(self.NS):
+                        state_x, state_y = state2xy(state)
+                        state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
+                        concat = torch.cat(
+                            (torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x,state_y,state_z], dtype=torch.float)))
+                        predss = UVFN(concat.to(device)).squeeze()
+                        predV[state] = predss
+                    output = loss(targetV.to(device), predV.to(device))
+                    print(f'Epoch {epoch} test mse: {str(output.item())}')
+                    wandb.log({"test_loss": str(output.item())})
+                    # print("preds max:", preds_max)
+                    plot_4rooms(targetV, title='Test True Epoch' + str(epoch) + ' MSE ' + str(round(output.item(), 4)))
+                    plot_4rooms(predV.squeeze(),
+                                title='Test Predicted Epoch' + str(epoch) + ' MSE ' + str(round(output.item(), 4)))
+                    print(f'Plotting epoch {epoch}: {epoch_loss}')
+                    room = random.randint(0,2)
+                    goal_cell = random.randint(0,15)
+                    goal = goal_cell + 16*room
+                    x, y = room_goal2xy(room, goal_cell)
+                    x, y, z = xy2polarencoding(x, y)
+                    targetV = allV[goal, :]
+                    predV = torch.zeros(self.NS).to(device)
+                    for state in range(self.NS):
+                        state_x, state_y = state2xy(state)
+                        state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
+                        concat = torch.cat(
+                            (torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x, state_y, state_z], dtype=torch.float)))
+                        predV[state] = UVFN(concat.to(device)).to(device).squeeze()
+                    output = loss(targetV.to(device), predV.to(device))
+                    plot_4rooms(targetV, title='True Epoch'+str(epoch)+' MSE '+str(round(output.item(), 4)))
+                    plot_4rooms(predV.squeeze(), title='Predicted Epoch'+str(epoch)+' MSE '+str(round(output.item(), 4)))
+                    print(f'Epoch {epoch} mse: {str(output.item())}')
+                    torch.save(UVFN.state_dict(), 'epoch'+str(epoch)+'loss'+str(round(epoch_loss, 4))+'.pkl')
+        return UVFN
+
 
     def uvfa_test_4rooms(self, UVFN, examples=10):
         loss = torch.nn.MSELoss()
@@ -432,11 +760,16 @@ class MTRL:
             target, pi = self.value_iteration_4rooms()
             UVFN.eval()
             with torch.no_grad():
-                preds = UVFN(XY)
-            total_loss += loss(preds.squeeze(), target).item()
+                # preds = UVFN(XY)
+                # preds = UVFN(torch.tensor([goal_cell], dtype=torch.float).to(self.device))
+                preds = UVFN(Y.to(self.device)).to(self.device)
+            total_loss += loss(preds.squeeze(), target.to(self.device)).item()
 
         avg_loss = total_loss / examples
-        print("MSE loss over",examples,"examples:",avg_loss)
+        print("Test MSE loss over",examples,"examples:",avg_loss)
+        wandb.log({"test_loss":avg_loss})
+        plot_4rooms(target, title='MSE '+str(round(avg_loss, 4)))
+        plot_4rooms(preds, title='MSE '+str(round(avg_loss, 4)))
         return avg_loss
 
     def uvfa_predict(self, uvfn, w, gamma=GAMMA, beta=BETA):
@@ -729,31 +1062,31 @@ def vector2grid4rooms(V):
             v_inroom = v % 16
             x = v_inroom % 4
             y = v_inroom // 4
-            if x==0 and y==0:
-                print("v:",v,"V:",V[v])
+            # if x==0 and y==0:
+            #     print("v:",v,"V:",V[v])
             if room == 0:
-                matrix[x][y] = V[v]
+                matrix[y][x] = V[v]
             elif room == 1:
-                matrix[x+5][y] = V[v]
+                matrix[y][x+5] = V[v]
             elif room == 2:
-                matrix[x+5][y+5] = V[v]
+                matrix[y+5][x+5] = V[v]
             elif room == 3:
-                matrix[x][y+5] = V[v]
+                matrix[y+5][x] = V[v]
         elif v == 64:
-            matrix[4][1] = V[v]
+            matrix[1][4] = V[v]
         elif v == 65:
-            matrix[7][4] = V[v]
+            matrix[4][7] = V[v]
             # print("7,4:",matrix[7][4])
         elif v == 66:
-            matrix[4][7] = V[v]
+            matrix[7][4] = V[v]
         elif v == 67:
-            matrix[1][4] = V[v]
-    print(matrix)
+            matrix[4][1] = V[v]
+    # print(matrix)
     return matrix
 
 
 
-def plot_4rooms(V):
+def plot_4rooms(V, title=''):
     import matplotlib.pyplot as plt
 
     min_val, max_val = 0, 9
@@ -778,19 +1111,21 @@ def plot_4rooms(V):
     ax.set_xticks([])
     ax.set_yticks([])
     # ax.grid()
+    ax.set_title(title)
     plt.show()
 
 
 wtrain = [[1., 0, 0], [0., 1, 0]]
 wtest = [[1., 1, 0], [0., 0, 1]]
 model = MTRL(wtrain, wtest, load_index='0')
+print("config:",wandb.config)
 print("loading 4rooms")
 model.load_dataset_4rooms()
 print("VI 4rooms")
 V, pi = model.value_iteration_4rooms()
 print(V)
-plot_4rooms(V)
-UVFN = model.uvfa_train_4rooms(epochs=1)
+# plot_4rooms(V)
+UVFN = model.uvfa_train_4rooms_1d(epochs=wandb.config['epochs'], hsize=wandb.config['hsize'], bsize=wandb.config['batch_size'])
 model.uvfa_test_4rooms(UVFN=UVFN)
 # print(pi)
 
