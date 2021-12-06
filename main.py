@@ -23,7 +23,7 @@ wandb.init(project="rl4rooms", entity="fgossi")
 wandb.config = {
   "epochs": 30000,
   "learning_rate": 0.005,
-  "hsize": 128,
+  "hsize": 10,
   "zerofy": False,
   "do_clamp": False,
   "batch_size": 20,
@@ -648,12 +648,18 @@ class MTRL:
 
     def uvfa_train_4rooms_1d(self, epochs=100, bsize=1, gamma=GAMMA, alpha=ALPHA, beta=BETA, hsize=10):
         """ Universal value function approximators. """
+        # ENCODING = 'single'
+        ENCODING = 'xyr'
+        TESTROOM = 2
         device = torch.device('cuda')
         self.device = device
-        UVFN = DQN(isize=6, osize=1, hsize=wandb.config['hsize'],
-                   do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
-        # UVFN = MultivariateRegression(isize=self.NS, osize=self.NS, hsize=wandb.config['hsize'],
-        #            do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        if ENCODING == 'single':
+            UVFN = DQN(isize=2, osize=1, hsize=wandb.config['hsize'], do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
+        elif ENCODING == 'xyr':
+            UVFN = DQN(isize=6, osize=1, hsize=wandb.config['hsize'], do_clamp=wandb.config['do_clamp'],
+                       zerofy=wandb.config['zerofy']).to(device)
+            # UVFN = MultivariateRegression(isize=6, osize=1, hsize=wandb.config['hsize'],
+            #     do_clamp=wandb.config['do_clamp'], zerofy=wandb.config['zerofy']).to(device)
         # UVFN.load_state_dict(torch.load('val158.5459epoch90loss709.4916.pkl'))
         # optim = torch.optim.Adagrad(UVFN.parameters(), lr=wandb.config['learning_rate'])
         optim = torch.optim.Adam(UVFN.parameters(),lr=wandb.config['learning_rate'])
@@ -678,16 +684,21 @@ class MTRL:
             UVFN.zero_grad()
             for batch in range(bsize):
                 random_room = random.randint(0, 2)
-                if random_room == 2:
+                if random_room == 2 and TESTROOM == 2:
                     random_room = 3
                 goal_cell = random.randint(0, 15)
                 x,y=room_goal2xy(random_room, goal_cell)
                 x,y,z = xy2polarencoding(x,y)
                 GOAL = goal_cell + 16*random_room
+                # print("random_room:",random_room)
                 STATE = random.randint(0, self.NS-1)
                 state_x, state_y = state2xy(STATE)
                 state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
-                concat = torch.cat((torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x,state_y,state_z], dtype=torch.float)))
+                concat = 0
+                if ENCODING == 'single':
+                    concat = torch.cat((torch.tensor([GOAL], dtype=torch.float), torch.tensor([STATE], dtype=torch.float)))
+                elif ENCODING == 'xyr':
+                    concat = torch.cat((torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x,state_y,state_z], dtype=torch.float)))
                 # print("concat:",concat)
                 preds = UVFN(concat.to(device)).to(device).squeeze()
                 output = loss(preds.to(device), allV[GOAL, STATE].to(device))
@@ -696,6 +707,40 @@ class MTRL:
                 output.backward()
 
             optim.step()
+            UVFN.zero_grad()
+
+            # if ENCODING == 'single':
+            #     for state2 in [15,16,31,32,47,48,63,64,65,66,67]:
+            #         random_room = random.randint(0, 2)
+            #         if random_room == 2 and TESTROOM == 2:
+            #             random_room = 3
+            #         if random.randint(0,1) == 0:
+            #             goal_cell = random.randint(0, 15)
+            #         else:
+            #             goal_cell = random.choice([0,3,12,15])
+            #         x, y = room_goal2xy(random_room, goal_cell)
+            #         x, y, z = xy2polarencoding(x, y)
+            #         GOAL = goal_cell + 16 * random_room
+            #         # print("random_room:",random_room)
+            #         STATE = state2
+            #         state_x, state_y = state2xy(STATE)
+            #         state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
+            #         concat = 0
+            #         if ENCODING == 'single':
+            #             concat = torch.cat(
+            #                 (torch.tensor([GOAL], dtype=torch.float), torch.tensor([STATE], dtype=torch.float)))
+            #         elif ENCODING == 'xyr':
+            #             concat = torch.cat((torch.tensor([x, y, z], dtype=torch.float),
+            #                                 torch.tensor([state_x, state_y, state_z], dtype=torch.float)))
+            #         # print("concat:",concat)
+            #         preds = UVFN(concat.to(device)).to(device).squeeze()
+            #         output = loss(preds.to(device), allV[GOAL, STATE].to(device))
+            #         # output = torch.mean(torch.exp(10*target)*(preds-target)**2)
+            #         epoch_loss += output.item()
+            #         output.backward()
+            #     optim.step()
+
+
 
             # print(f'Epoch {epoch}: {epoch_loss}')
             wandb.log({"loss": epoch_loss})
@@ -705,7 +750,7 @@ class MTRL:
             if (epoch-1)%500 == 0:
                 UVFN.eval()
                 with torch.no_grad():
-                    room = 2
+                    room = TESTROOM
                     goal_cell = random.randint(0, 15)
                     goal = goal_cell + 16 * room
                     targetV = allV[goal, :].to(device)
@@ -715,8 +760,12 @@ class MTRL:
                     for state in range(self.NS):
                         state_x, state_y = state2xy(state)
                         state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
-                        concat = torch.cat(
-                            (torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x,state_y,state_z], dtype=torch.float)))
+                        if ENCODING == 'single':
+                            concat = torch.cat(
+                                (torch.tensor([goal], dtype=torch.float), torch.tensor([state], dtype=torch.float)))
+                        elif ENCODING == 'xyr':
+                            concat = torch.cat((torch.tensor([x, y, z], dtype=torch.float),
+                                                torch.tensor([state_x, state_y, state_z], dtype=torch.float)))
                         predss = UVFN(concat.to(device)).squeeze()
                         predV[state] = predss
                     output = loss(targetV.to(device), predV.to(device))
@@ -728,6 +777,8 @@ class MTRL:
                                 title='Test Predicted Epoch' + str(epoch) + ' MSE ' + str(round(output.item(), 4)))
                     print(f'Plotting epoch {epoch}: {epoch_loss}')
                     room = random.randint(0,2)
+                    if room == 2 and TESTROOM == 2:
+                        room = 3
                     goal_cell = random.randint(0,15)
                     goal = goal_cell + 16*room
                     x, y = room_goal2xy(room, goal_cell)
@@ -737,8 +788,12 @@ class MTRL:
                     for state in range(self.NS):
                         state_x, state_y = state2xy(state)
                         state_x, state_y, state_z = xy2polarencoding(state_x, state_y)
-                        concat = torch.cat(
-                            (torch.tensor([x,y,z], dtype=torch.float), torch.tensor([state_x, state_y, state_z], dtype=torch.float)))
+                        if ENCODING == 'single':
+                            concat = torch.cat(
+                                (torch.tensor([goal], dtype=torch.float), torch.tensor([state], dtype=torch.float)))
+                        elif ENCODING == 'xyr':
+                            concat = torch.cat((torch.tensor([x, y, z], dtype=torch.float),
+                                                torch.tensor([state_x, state_y, state_z], dtype=torch.float)))
                         predV[state] = UVFN(concat.to(device)).to(device).squeeze()
                     output = loss(targetV.to(device), predV.to(device))
                     plot_4rooms(targetV, title='True Epoch'+str(epoch)+' MSE '+str(round(output.item(), 4)))

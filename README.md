@@ -51,7 +51,10 @@ press `Ctrl+O` then `Enter` then `Ctrl+X`
 
 ### install Meta-World
 
-`pip3 install git+https://github.com/rlworkgroup/metaworld.git@master#egg=metaworld`
+`git clone https://github.com/rlworkgroup/metaworld.git`
+`cd metaworld`
+edit setup.py line 8 to `mujoco-py<2.2,>=2.1,`
+`pip3 install -e .`
 
 test if Meta-World is installed correctly in a python console:
 
