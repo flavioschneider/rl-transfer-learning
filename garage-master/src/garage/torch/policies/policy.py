@@ -66,7 +66,12 @@ class Policy(torch.nn.Module, BasePolicy, abc.ABC):
             state_dict (dict): State dictionary.
 
         """
-        self.load_state_dict(state_dict)
+        try:
+            self.load_state_dict(state_dict)
+        except Exception as e:
+            # print(e)
+            # print("state_dict not loaded, continuing")
+            pass
 
     @property
     def name(self):

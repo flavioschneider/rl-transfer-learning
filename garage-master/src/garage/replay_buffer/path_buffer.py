@@ -19,7 +19,7 @@ class PathBuffer:
     """
 
     def __init__(self, capacity_in_transitions, env_spec=None):
-        self._capacity = capacity_in_transitions
+        self._capacity = int(capacity_in_transitions)
         self._env_spec = env_spec
         self._transitions_stored = 0
         self._first_idx_of_next_path = 0
@@ -186,7 +186,10 @@ class PathBuffer:
         """
         buf_arr = self._buffer.get(key, None)
         if buf_arr is None:
-            buf_arr = np.zeros((self._capacity, array.shape[1]), array.dtype)
+            # print("self capacity:",int(self._capacity))
+            # print("shape[1]:",array.shape[1])
+            # print("dtyoe:",array.dtype)
+            buf_arr = np.zeros((int(self._capacity), array.shape[1]), dtype=array.dtype)
             self._buffer[key] = buf_arr
         return buf_arr
 

@@ -86,6 +86,14 @@ class HORDE(RLAlgorithm):
         clip_gradient=10,
         target_update_freq=5,
         reward_scale=1.):
+
+        self._theta = torch.zeros(12)
+        self._e = torch.zeros(12)
+        self._lambda = 0.5
+        self._alpha_theta = 0.1
+        self._alpha_w = 0.001
+        self._w = torch.zeros(12)
+
         self._clip_reward = clip_rewards
         self._clip_grad = clip_gradient
 
@@ -198,12 +206,7 @@ class HORDE(RLAlgorithm):
                 self._min_buffer_size):
                 timesteps = self.replay_buffer.sample_timesteps(
                     self._buffer_batch_size)
-                qf_loss, y, q = tuple(v.cpu().numpy()
-                                      for v in self._optimize_qf(timesteps))
-
-                self._episode_qf_losses.append(qf_loss)
-                self._epoch_ys.append(y)
-                self._epoch_qs.append(q)
+                self._optimize_qf(timesteps)
 
         if itr % self._steps_per_epoch == 0:
             self._log_eval_results(epoch)
@@ -224,13 +227,13 @@ class HORDE(RLAlgorithm):
             tabular.record('QFunction/AverageQFunctionLoss',
                            np.mean(self._episode_qf_losses))
             tabular.record('QFunction/AverageQ', np.mean(self._epoch_qs))
-            tabular.record('QFunction/MaxQ', np.max(self._epoch_qs))
-            tabular.record('QFunction/AverageAbsQ',
-                           np.mean(np.abs(self._epoch_qs)))
-            tabular.record('QFunction/AverageY', np.mean(self._epoch_ys))
-            tabular.record('QFunction/MaxY', np.max(self._epoch_ys))
-            tabular.record('QFunction/AverageAbsY',
-                           np.mean(np.abs(self._epoch_ys)))
+            # tabular.record('QFunction/MaxQ', np.max(self._epoch_qs))
+            # tabular.record('QFunction/AverageAbsQ',
+            #                np.mean(np.abs(self._epoch_qs)))
+            # tabular.record('QFunction/AverageY', np.mean(self._epoch_ys))
+            # tabular.record('QFunction/MaxY', np.max(self._epoch_ys))
+            # tabular.record('QFunction/AverageAbsY',
+            #                np.mean(np.abs(self._epoch_ys)))
 
     def _optimize_qf(self, timesteps):
         """Perform algorithm optimizing.
@@ -256,6 +259,7 @@ class HORDE(RLAlgorithm):
 
         phi_t = observations[0]
         phi_bar_t = observations[1]
+        # print("phi_bar_t shape",phi_bar_t.shape)
         delta_t = rewards[1] + \
                   self._discount * torch.dot(self._theta, phi_bar_t) - \
                   torch.dot(self._theta, phi_t)
@@ -263,36 +267,37 @@ class HORDE(RLAlgorithm):
         self._theta = self._theta + self._alpha_theta * (delta_t * self._e -
              self._discount*(1-self._lambda)*torch.dot(self._w, self._e)*phi_bar_t)
         self._w = self._w + self._alpha_w * (delta_t * self._e -
-                                             (torch.dot(self._w, phi_t)),
-                                             phi_t)
-        with torch.no_grad():
-            target_qvals = self._target_qf(next_inputs)
-            best_qvals, _ = torch.max(target_qvals, 1)
-            best_qvals = best_qvals.unsqueeze(1)
+                                             (torch.dot(self._w, phi_t))*phi_t)
 
-        rewards_clipped = rewards
-        if self._clip_reward is not None:
-            rewards_clipped = torch.clamp(rewards, -1 * self._clip_reward,
-                                          self._clip_reward)
-        y_target = (rewards_clipped +
-                    (1.0 - terminals) * self._discount * best_qvals)
-        y_target = y_target.squeeze(1)
+        qf = torch.dot(self._theta, phi_t)
+        # with torch.no_grad():
+        #     target_qvals = self._target_qf(next_inputs)
+        #     best_qvals, _ = torch.max(target_qvals, 1)
+        #     best_qvals = best_qvals.unsqueeze(1)
+        #
+        # rewards_clipped = rewards
+        # if self._clip_reward is not None:
+        #     rewards_clipped = torch.clamp(rewards, -1 * self._clip_reward,
+        #                                   self._clip_reward)
+        # y_target = (rewards_clipped +
+        #             (1.0 - terminals) * self._discount * best_qvals)
+        # y_target = y_target.squeeze(1)
+        #
+        # # optimize qf
+        # qvals = self._qf(inputs)
+        # selected_qs = torch.sum(qvals * actions, axis=1)
+        # qval_loss = F.smooth_l1_loss(selected_qs, y_target)
+        #
+        # zero_optim_grads(self._qf_optimizer)
+        # qval_loss.backward()
+        #
+        # # optionally clip the gradients
+        # if self._clip_grad is not None:
+        #     torch.nn.utils.clip_grad_norm_(self.policy.parameters(),
+        #                                    self._clip_grad)
+        # self._qf_optimizer.step()
 
-        # optimize qf
-        qvals = self._qf(inputs)
-        selected_qs = torch.sum(qvals * actions, axis=1)
-        qval_loss = F.smooth_l1_loss(selected_qs, y_target)
-
-        zero_optim_grads(self._qf_optimizer)
-        qval_loss.backward()
-
-        # optionally clip the gradients
-        if self._clip_grad is not None:
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(),
-                                           self._clip_grad)
-        self._qf_optimizer.step()
-
-        return (qval_loss.detach(), y_target, selected_qs.detach())
+        return self._e.detach(), None, qf
 
     def to(self, device=None):
         """Put all the networks within the model on device.

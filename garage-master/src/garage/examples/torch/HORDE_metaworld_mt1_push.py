@@ -20,6 +20,7 @@ from garage.torch.value_functions import GaussianMLPValueFunction
 from garage.trainer import Trainer
 from garage.replay_buffer import PathBuffer
 from garage.torch.q_functions import ContinuousMLPQFunction
+from garage.np.exploration_policies import EpsilonGreedyPolicy
 
 
 @click.command()
@@ -40,8 +41,8 @@ def horde_metaworld_mt1_push(ctxt, seed=1, epochs=500, batch_size=1024):
 
     """
     set_seed(seed)
-    n_tasks = 50
-    mt1 = metaworld.MT1('push-v2')
+    n_tasks = 1
+    mt1 = metaworld.MT1('push-v1')
     train_task_sampler = MetaWorldTaskSampler(mt1, 'train',
                                               lambda env, _: normalize(env))
     envs = [env_up() for env_up in train_task_sampler.sample(n_tasks)]
@@ -61,16 +62,28 @@ def horde_metaworld_mt1_push(ctxt, seed=1, epochs=500, batch_size=1024):
                          max_episode_length=env.spec.max_episode_length)
 
     replay_buffer = PathBuffer(
-        capacity_in_transitions=2)
+        capacity_in_transitions=1e4)
 
     qf = ContinuousMLPQFunction(env_spec=env.spec,
                                 hidden_sizes=(32, 32),
                                 hidden_nonlinearity=torch.tanh,
                                 output_nonlinearity=None
                                 )
+    n_epochs = epochs
+    steps_per_epoch = 1
+    sampler_batch_size = batch_size
+    num_timesteps = n_epochs * steps_per_epoch * sampler_batch_size
+    exploration_policy = EpsilonGreedyPolicy(
+        env_spec=env.spec,
+        policy=policy,
+        total_timesteps=num_timesteps,
+        max_epsilon=1.0,
+        min_epsilon=0.01,
+        decay_ratio=0.1)
 
     algo = HORDE(env_spec=env.spec,
                 policy=policy,
+                exploration_policy=exploration_policy,
                 qf=qf,
                 replay_buffer=replay_buffer,
                 sampler=sampler)
