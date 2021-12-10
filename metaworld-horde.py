@@ -95,10 +95,22 @@ def q_learning(env, num_episodes, discount_factor=1.0, alpha=0.5, epsilon=0.1):
         for t in itertools.count():
 
             # Take a step
+            # implement epsilon greedy policy
             action_probs = policy(state)
             action = np.random.choice(np.arange(len(action_probs)), p=action_probs)
             action = action2box(action)
             next_state, reward, done, _ = env.step(action)
+
+            # use tile coding to 
+
+            # calculate phi_bar_t
+            phi_bar_t = np.sum()
+            # calculate delta_t
+            # update e_t
+            # update theta_t
+            # update w_t
+
+
 
             # # Update statistics
             # stats.episode_rewards[i_episode] += reward
