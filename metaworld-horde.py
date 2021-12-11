@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import sys
 from collections import defaultdict
+from PyFixedReps import TileCoder
 
 
 def make_epsilon_greedy_policy(epsilon, nA):
@@ -25,10 +26,10 @@ def make_epsilon_greedy_policy(epsilon, nA):
 
     """
 
-    def policy_fn(Q):
+    def policy_fn(best_action):
         nA = 5**4
         A = np.ones(nA, dtype=float) * epsilon / nA
-        best_action = np.argmax(Q)
+        # best_action = np.argmax(Q)
         # best_action = np.array([1,1,1,1],dtype=float)
         A[best_action] += (1.0 - epsilon)
         # print("sum:",sum(A))
@@ -51,8 +52,18 @@ def box2state(next_state):
     pass
 
 
-def tile_coding(state, dim):
-    return state
+def greedy_action(theta_t, phi_t_S, tc_action):
+    maxQ = -1000000
+    best_action = None
+    for a in range(625):
+        a_box = action2box(a)
+        phi_t_S_A = np.append(phi_t_S, tc_action.encode(a_box))
+        Q_S_A = np.dot(theta_t, phi_t_S_A)
+        if Q_S_A > maxQ:
+            maxQ = Q_S_A
+            best_action = a
+
+    return best_action
 
 
 def q_learning(env, num_episodes, discount_factor=0.9, lambda_=0.4, alpha_theta=0.1, alpha_w=0.00001):
@@ -88,33 +99,30 @@ def q_learning(env, num_episodes, discount_factor=0.9, lambda_=0.4, alpha_theta=
     # behavior policy: random
     b_policy = make_epsilon_greedy_policy(0.99, env.action_space.shape[0])
 
-    phi_dimension = 16  # 4 + state dimension
+    phi_state_dim = 13312 - 1024
+
+    phi_dimension = phi_state_dim + 1024  # state features dimension + action features dimension
+
     w_t = theta_t = np.ones(phi_dimension)
     Q_t_state = np.zeros(625)
-    tot_timesteps = 10
+    tot_timesteps = 20
+    # phi = TiledQTable(nA=env.action_space.n, obsLow=env.observation_space.low, obsHigh=env.observation_space.high, tiling_specs=tiling_specs)
+    tc_state = TileCoder({'tiles': 2, 'tilings': 3, 'dims': 12, 'input_ranges': [(-1.0, 1.0) for _ in range(12)], 'scale_output': True, 'random_offset': True})
+    tc_action = TileCoder({'tiles': 4, 'tilings': 4, 'dims': 4, 'input_ranges': [(-1.0, 1.0) for _ in range(4)], 'scale_output': True})
 
     for i_episode in range(num_episodes):
         # Print out which episode we're on, useful for debugging.
         if (i_episode + 1) % 10 == 0:
+            # evaluation
             state = env.reset()
             for t in range(tot_timesteps):
-                phi_t_S = tile_coding(state, phi_dimension - 4)
-                all_actions = np.zeros((625, 4))
-                for a in range(625):
-                    all_actions[a, :] = action2box(a)
-                phi_t_S_allA = np.zeros((625, 16))
-                phi_t_S_allA[:, 0:12] = np.tile(phi_t_S, 625).reshape(625, 12)
-                phi_t_S_allA[:, 12:16] = all_actions
-                # current approximation of Q(state) = phi_t_S_allA @ theta_t (625x16)*(16x1)
-                Q_t_state = phi_t_S_allA @ theta_t
+                # print("state:",state)
+                phi_t_S = tc_state.encode(state)
+                best_action = action2box(greedy_action(theta_t=theta_t, phi_t_S=phi_t_S, tc_action=tc_action))
                 # Take a step
                 # implement epsilon greedy policy
-                action_probs_pi = pi_policy(Q_t_state)
-                num_actions = len(action_probs_pi)
-                action_index_pi = np.random.choice(np.arange(num_actions), p=action_probs_pi)
-                action_pi = action2box(action_index_pi)
-                next_state, reward, done, _ = env.step(action_pi)
-                print("action:",action_pi)
+                next_state, reward, done, _ = env.step(best_action)
+                print("action:",best_action)
                 print("evaluation reward:",reward)
                 if done:
                     break
@@ -133,40 +141,45 @@ def q_learning(env, num_episodes, discount_factor=0.9, lambda_=0.4, alpha_theta=
         e_t = np.zeros(phi_dimension)
 
         for t in range(tot_timesteps):
+            # training
             # use tile coding to encode state into phi
-            phi_t_S = tile_coding(state, phi_dimension-4)
-            all_actions = np.zeros((625, 4))
-            for a in range(625):
-                all_actions[a, :] = action2box(a)
-            phi_t_S_allA = np.zeros((625, 16))
-            # print("phi_t_S:",phi_t_S)
-            phi_t_S_allA[:, 0:12] = np.tile(phi_t_S, 625).reshape(625,12)
-            phi_t_S_allA[:, 12:16] = all_actions
+            phi_t_S = tc_state.encode(state)
+            # all_actions = np.zeros((625, 4))
+            # for a in range(625):
+            #     all_actions[a, :] = action2box(a)
+            #
+            # phi_t_S_allA = np.zeros((625, phi_dimension))
+            # phi_t_S_allA[:, 0:phi_state_dim] = np.tile(phi_t_S, 625).reshape(625, phi_state_dim)
+            # phi_t_S_allA[:, phi_state_dim:phi_dimension] = all_actions
             # print("phi_t_S_allA:",phi_t_S_allA)
             # current approximation of Q(state) = phi_t_S_allA @ theta_t (625x16)*(16x1)
-            Q_t_state = phi_t_S_allA @ theta_t
+            # Q_t_state = phi_t_S_allA @ theta_t
             # Take a step
             # implement greedy policy w.r.t. approximate Q as target policy
-            action_probs_pi = pi_policy(Q_t_state)
+            best_action = greedy_action(theta_t, phi_t_S, tc_action)
+            action_probs_pi = np.zeros(625)
+            action_probs_pi[best_action] = 1.0
             # implement behavior policy (random)
-            action_probs_b = b_policy(Q_t_state)
+            action_probs_b = b_policy(best_action)
             num_actions = len(action_probs_b)
             action_index_b = np.random.choice(np.arange(num_actions), p=action_probs_b)
             action_b = action2box(action_index_b)
             next_state, reward, done, _ = env.step(action_b)
-            next_action_probs_pi = pi_policy(next_state)
+            phi_t_Snext = tc_state.encode(next_state)
+            best_action_next = greedy_action(theta_t, phi_t_Snext, tc_action)
+            next_action_probs_pi = pi_policy(best_action_next)
 
             # print("action",action)
 
             # phi_t_Snext = phi_t(S_{t+1})
-            phi_t_Snext = tile_coding(next_state, phi_dimension-1)
+
             # calculate phi_bar_t
-            phi_bar_t = np.zeros(16)
+            phi_bar_t = np.zeros(phi_dimension)
             for a in range(num_actions):
-                phi_bar_t += next_action_probs_pi[a] * np.append(phi_t_Snext, action2box(a))
+                phi_bar_t += next_action_probs_pi[a] * np.append(phi_t_Snext, tc_action.encode(action2box(a)))
             # print("phi_bar_t", phi_bar_t)
             # phi_t_S_A = phi_t(S_t, A_t)
-            phi_t_S_A = np.append(phi_t_S, action_b)
+            phi_t_S_A = np.append(phi_t_S, tc_action.encode(action_b))
             # calculate delta_t (scalar)
             delta_t = reward + discount_factor * np.dot(theta_t, phi_bar_t) - np.dot(theta_t, phi_t_S_A)
             # update e_t (vector)
