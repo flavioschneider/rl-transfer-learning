@@ -9,6 +9,7 @@ from datetime import datetime
 import argparse
 from utils import evaluate_policy,str2bool
 import metaworld
+import wandb
 
 '''Hyperparameter Setting'''
 parser = argparse.ArgumentParser()
@@ -16,7 +17,7 @@ parser.add_argument('--EnvIdex', type=int, default=0, help='CP-v1, LLd-v2')
 parser.add_argument('--write', type=str2bool, default=True, help='Use SummaryWriter to record the training')
 parser.add_argument('--render', type=str2bool, default=False, help='Render or Not')
 parser.add_argument('--Loadmodel', type=str2bool, default=False, help='Load pretrained model or Not')
-parser.add_argument('--ModelIdex', type=int, default=250*1000, help='which model to load')
+parser.add_argument('--pth', type=str, default='', help='which model to load')
 
 parser.add_argument('--seed', type=int, default=532, help='random seed')
 parser.add_argument('--Max_train_steps', type=int, default=1e6, help='Max training steps')
@@ -55,8 +56,12 @@ def box2action(box):
     return a
 
 
+def transform_reward(r):
+    # return max(0,np.log2(r+200))
+    return r
 
 def main():
+    wandb.init(project="ddqn-metaworld", entity="fgossi")
     # EnvName = ['CartPole-v1','LunarLander-v2']
     # BriefEnvName = ['CPV1', 'LLdV2']
     # Env_With_DW = [True, True] #DW: Die or Win
@@ -66,11 +71,14 @@ def main():
     # env = gym.make(EnvName[EnvIdex])
     mt1 = metaworld.MT1('push-v1')  # Construct the benchmark, sampling tasks
     env = mt1.train_classes['push-v1']()  # Create an environment with task `pick_place`
-    task = mt1.train_tasks[0]
+    task = mt1.train_tasks[1]
     env.set_task(task)  # Set task
+    env._last_rand_vec[3] = -0.09   #-0.09 or 0.09
+    env._last_rand_vec[4] = 0.81    #0.81 or 0.89
+    wandb.log({"goalX": env._last_rand_vec[3], "goalY":env._last_rand_vec[4]})
     # eval_env = gym.make(EnvName[EnvIdex])
     eval_env = env
-    state_dim = env.observation_space.shape[0]
+    state_dim = 6
     action_dim = 625
     max_e_steps = 150
 
@@ -108,18 +116,32 @@ def main():
     }
     if not os.path.exists('model'): os.mkdir('model')
     model = DQN_Agent(**kwargs)
-    if opt.Loadmodel: model.load(algo_name,'metaworld',opt.ModelIdex)
+    if opt.Loadmodel: model.load(opt.pth)
 
     buffer = ReplayBuffer(state_dim, action_dim, max_size=int(1e6))
 
+    minS = np.ones(state_dim)*10
+    maxS = np.ones(state_dim)*(-10)
+
+    wandb.watch(model.q_net, log_freq=10000)
+    wandb.watch(model.q_target, log_freq=10000)
+
+    print(str(kwargs['batch_size']))
+
     if opt.render:
-        score = evaluate_policy(eval_env, model, True, 20)
+        score, _ = evaluate_policy(eval_env, model, True, 20)
         print('EnvName:', 'metaworld', 'seed:', seed, 'score:', score)
     else:
         total_steps = 0
         while total_steps < opt.Max_train_steps:
 
             s, done, ep_r, steps = env.reset(), False, 0, 0
+            ep_r = transform_reward(ep_r)
+            s = s[:6]
+
+            minS = np.minimum(s, minS)
+            maxS = np.maximum(s, maxS)
+
             while not done:
                 # print("step:", steps)
                 steps += 1  #steps in current episode
@@ -128,6 +150,11 @@ def main():
                 else:
                     a = action2box(model.select_action(s, deterministic=False))
                 s_prime, r, done, info = env.step(a)
+                r = transform_reward(r)
+                s_prime = s_prime[:6]
+
+                minS = np.minimum(s_prime, minS)
+                maxS = np.maximum(s_prime, maxS)
 
                 '''Avoid impacts caused by reaching max episode steps'''
                 if (done and steps != max_e_steps):
@@ -148,17 +175,24 @@ def main():
                 '''record & log'''
                 if (total_steps) % opt.eval_interval == 0:
                     model.exp_noise *= opt.noise_decay
-                    score = evaluate_policy(eval_env, model, render=False)
+                    score, positive_eps = evaluate_policy(eval_env, model, render=False, state_dim=state_dim)
                     if opt.write:
                         writer.add_scalar('ep_r', score, global_step=total_steps)
                         writer.add_scalar('noise', model.exp_noise, global_step=total_steps)
                     print('EnvName:','metaworld','seed:',seed,'steps: {}k'.format(int(total_steps/1000)),'score:', score)
+                    wandb.log({"reward": score, "step": total_steps, "pos_eps":positive_eps})
                 total_steps += 1
 
                 '''save model'''
                 if (total_steps) % opt.save_interval == 0:
-                    model.save(algo_name,'metaworld',total_steps)
+                    model.save(algo_name,'metaworld'+'_bs'+str(kwargs['batch_size'])+'gamma'+str(opt.gamma)+'nDec'+str(opt.noise_decay),total_steps)
+
+                '''print minS, maxS'''
+                if (total_steps) % 10000 == 0:
+                    print("minS", minS, "\nmaxS", maxS)
     env.close()
+
+    print("minS",minS,"\nmaxS",maxS)
 
 if __name__ == '__main__':
     main()

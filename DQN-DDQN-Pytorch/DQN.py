@@ -64,7 +64,7 @@ class DQN_Agent(object):
 			if deterministic:
 				a = self.q_net(state).argmax().item()
 			else:
-				if np.random.rand() < self.exp_noise:
+				if np.random.rand() < self.exp_noise + 0.05:
 					a = np.random.randint(0,self.action_dim)
 				else:
 					a = self.q_net(state).argmax().item()
@@ -108,9 +108,10 @@ class DQN_Agent(object):
 		torch.save(self.q_net.state_dict(), "./model/{}_{}_{}.pth".format(algo,EnvName,steps))
 
 
-	def load(self,algo,EnvName,steps):
-		self.q_net.load_state_dict(torch.load("./model/{}_{}_{}.pth".format(algo,EnvName,steps)))
-		self.q_target.load_state_dict(torch.load("./model/{}_{}_{}.pth".format(algo,EnvName,steps)))
+	def load(self,filename):
+		self.q_net.load_state_dict(torch.load("./model/{}".format(filename)))
+		self.q_target.load_state_dict(torch.load("./model/{}".format(filename)))
+		print("loaded ./model/{}".format(filename))
 
 
 class ReplayBuffer(object):
