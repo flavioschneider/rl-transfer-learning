@@ -80,7 +80,7 @@ def main():
     eval_env = env
     state_dim = 6
     action_dim = 625
-    max_e_steps = 500
+
 
 
     #Use DDQN or DQN
@@ -92,6 +92,7 @@ def main():
     env.seed(seed)
     eval_env.seed(seed)
     np.random.seed(seed)
+    max_e_steps = env.max_path_length
 
     print('Algorithm:',algo_name,'  Env:','metaworld','  state_dim:',state_dim,'  action_dim:',action_dim,'  Random Seed:',seed, '  max_e_steps:',max_e_steps)
     print('\n')
@@ -142,8 +143,8 @@ def main():
             minS = np.minimum(s, minS)
             maxS = np.maximum(s, maxS)
 
-            while not done:
-                # print("step:", steps)
+            while env.curr_path_length < env.max_path_length:
+                # print("step:", steps, env.curr_path_length)
                 steps += 1  #steps in current episode
                 if buffer.size < opt.random_steps:
                     a = env.action_space.sample()
@@ -155,9 +156,6 @@ def main():
 
                 minS = np.minimum(s_prime, minS)
                 maxS = np.maximum(s_prime, maxS)
-
-                if steps == 500:
-                    done = True
 
                 '''Avoid impacts caused by reaching max episode steps'''
                 if (done and steps != max_e_steps):
