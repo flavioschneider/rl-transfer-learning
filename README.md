@@ -10,6 +10,9 @@
 
 `module load python_gpu/3.8.5`
 
+`module load eth_proxy`
+
+
 ### create virtual environment
 
 `python3 -m venv RLenv` 

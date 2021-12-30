@@ -23,6 +23,8 @@ def evaluate_policy(env, model, render, turns = 3,state_dim=None):
             s_prime = s_prime[:state_dim]
             ep_r += r
             steps += 1
+            if steps == 500:
+                done = True
             s = s_prime
             if render:
                 env.render()

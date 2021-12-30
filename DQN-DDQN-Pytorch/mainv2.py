@@ -80,7 +80,7 @@ def main():
     eval_env = env
     state_dim = 6
     action_dim = 625
-    max_e_steps = 150
+    max_e_steps = 500
 
 
     #Use DDQN or DQN
