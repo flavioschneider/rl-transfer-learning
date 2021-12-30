@@ -61,7 +61,7 @@ def transform_reward(r):
     return r
 
 def main():
-    wandb.init(project="ddqn-metaworld", entity="fgossi")
+    wandb.init(project="ddqn-metaworld", entity="fgossi", settings=wandb.Settings(start_method="fork"))
     # EnvName = ['CartPole-v1','LunarLander-v2']
     # BriefEnvName = ['CPV1', 'LLdV2']
     # Env_With_DW = [True, True] #DW: Die or Win
