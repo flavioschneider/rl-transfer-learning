@@ -74,7 +74,7 @@ def main():
     task = mt1.train_tasks[1]
     env.set_task(task)  # Set task
     env._last_rand_vec[3] = -0.09   #-0.09 or 0.09
-    env._last_rand_vec[4] = 0.81    #0.81 or 0.89
+    env._last_rand_vec[4] = 0.89    #0.81 or 0.89
     wandb.log({"goalX": env._last_rand_vec[3], "goalY":env._last_rand_vec[4]})
     # eval_env = gym.make(EnvName[EnvIdex])
     eval_env = env

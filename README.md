@@ -4,7 +4,7 @@
 
 `env2lmod`
 
-`module load gcc/8.2.0`
+`module load gcc/6.3.0`
 
 `module load mesa/18.3.6`
 
@@ -52,8 +52,12 @@ press `Ctrl+O` then `Enter` then `Ctrl+X`
 ### install Meta-World
 
 `git clone https://github.com/rlworkgroup/metaworld.git`
+
 `cd metaworld`
-edit setup.py line 8 to `mujoco-py<2.2,>=2.1,`
+
+`nano setup.py`
+change in line 8 from `mujoco-py<2.1` to `mujoco-py<2.2`
+
 `pip3 install -e .`
 
 test if Meta-World is installed correctly in a python console:

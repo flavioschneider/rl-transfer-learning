@@ -64,7 +64,8 @@ class DQN_Agent(object):
 			if deterministic:
 				a = self.q_net(state).argmax().item()
 			else:
-				if np.random.rand() < self.exp_noise + 0.05:
+				# if np.random.rand() < self.exp_noise + 0.05:
+				if np.random.rand() < self.exp_noise:
 					a = np.random.randint(0,self.action_dim)
 				else:
 					a = self.q_net(state).argmax().item()
