@@ -104,7 +104,7 @@ def main():
         writer = SummaryWriter(log_dir=writepath)
 
     kwargs = {
-        "env_with_dw":env_with_dw,
+        "env_with_dw": env_with_dw,
         "state_dim": state_dim,
         "action_dim": action_dim,
         "gamma": opt.gamma,
@@ -155,6 +155,9 @@ def main():
 
                 minS = np.minimum(s_prime, minS)
                 maxS = np.maximum(s_prime, maxS)
+
+                if steps == 500:
+                    done = True
 
                 '''Avoid impacts caused by reaching max episode steps'''
                 if (done and steps != max_e_steps):
