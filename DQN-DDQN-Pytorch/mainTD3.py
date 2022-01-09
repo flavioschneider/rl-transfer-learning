@@ -511,6 +511,7 @@ task = mt1.train_tasks[1]
 env.set_task(task)  # Set task
 env._last_rand_vec[0] = -0.09   #-0.09 or 0.07
 env._last_rand_vec[1] = 0.86    #0.86 or 0.89
+wandb.log({"goalX": env._last_rand_vec[0], "goalY": env._last_rand_vec[1]})
 
 # Set seeds
 env.seed(SEED)
