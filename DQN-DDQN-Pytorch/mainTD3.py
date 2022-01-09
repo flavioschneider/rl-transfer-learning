@@ -143,6 +143,12 @@ class ReplayBuffer(object):
         return np.array(states), np.array(actions), np.array(next_states), np.array(rewards).reshape(-1, 1), np.array(
             dones).reshape(-1, 1)
 
+    def save(self):
+        np_buffer = np.asarray(self.storage)
+        with open('replaybuffer' + str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]) + '.npy', 'wb') as f:
+            print("Saving replay buffer in ", f)
+            np.save(f, np_buffer)
+
 
 class TD3(object):
     """Agent class that handles the training of the networks and provides outputs as actions
@@ -468,6 +474,7 @@ def train(agent, env, replay_buffer, runner):
                         agent.save("best_avg", "saves")
 
                     wandb.log({"reward": eval_reward, "step": total_timesteps})
+                    # replay_buffer.save()
 
                 episode_reward = 0
                 episode_timesteps = 0
@@ -547,6 +554,8 @@ for i in tqdm(range(100)):
 reward, state_store, action_store = evaluate_policy_store(policy, env, render=False)
 
 # %%
+
+replay_buffer.save()
 
 env.close()
 
