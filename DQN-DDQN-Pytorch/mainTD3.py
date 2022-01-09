@@ -284,14 +284,14 @@ class Runner():
 
         # Perform action
         new_obs, reward, done, _ = self.env.step(action)
-        done_bool = 0 if episode_timesteps + 1 == 200 else float(done)
+        done_bool = 0
 
         # Store data in replay buffer
         replay_buffer.add((self.obs, new_obs, action, reward, done_bool))
 
         self.obs = new_obs
 
-        if done:
+        if env.curr_path_length >= env.max_path_length:
             self.obs = self.env.reset()
             done = False
 
@@ -317,7 +317,7 @@ def evaluate_policy(policy, env, eval_episodes=100, render=False):
     for i in range(eval_episodes):
         obs = env.reset()
         done = False
-        while not done:
+        while env.curr_path_length < env.max_path_length:
             if render:
                 env.render()
             action = policy.select_action(np.array(obs), noise=0)
@@ -354,7 +354,7 @@ def evaluate_policy_store(policy, env, eval_episodes=100, render=False):
         obs = env.reset()
         done = False
         c = 0
-        while not done:
+        while env.curr_path_length < env.max_path_length:
             state_store[j, :] = obs
             if render:
                 env.render()
@@ -396,7 +396,7 @@ def observe(env, replay_buffer, observation_steps):
         obs = new_obs
         time_steps += 1
 
-        if done:
+        if env.curr_path_length >= env.max_path_length:
             obs = env.reset()
             done = False
 
