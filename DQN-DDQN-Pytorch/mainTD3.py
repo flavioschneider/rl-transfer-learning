@@ -37,9 +37,9 @@ class Actor(nn.Module):
     def __init__(self, state_dim, action_dim, max_action):
         super(Actor, self).__init__()
 
-        self.l1 = nn.Linear(state_dim, 400)
-        self.l2 = nn.Linear(400, 300)
-        self.l3 = nn.Linear(300, action_dim)
+        self.l1 = nn.Linear(state_dim, 100)
+        self.l2 = nn.Linear(100, 100)
+        self.l3 = nn.Linear(100, action_dim)
 
         self.max_action = max_action
 
@@ -67,14 +67,14 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         # Q1 architecture
-        self.l1 = nn.Linear(state_dim + action_dim, 400)
-        self.l2 = nn.Linear(400, 300)
-        self.l3 = nn.Linear(300, 1)
+        self.l1 = nn.Linear(state_dim + action_dim, 100)
+        self.l2 = nn.Linear(100, 100)
+        self.l3 = nn.Linear(100, 1)
 
         # Q2 architecture
-        self.l4 = nn.Linear(state_dim + action_dim, 400)
-        self.l5 = nn.Linear(400, 300)
-        self.l6 = nn.Linear(300, 1)
+        self.l4 = nn.Linear(state_dim + action_dim, 100)
+        self.l5 = nn.Linear(100, 100)
+        self.l6 = nn.Linear(100, 1)
 
     def forward(self, x, u):
         xu = torch.cat([x, u], 1)
@@ -474,13 +474,13 @@ def train(agent, env, replay_buffer, runner):
                         agent.save("best_avg", "saves")
 
                     wandb.log({"reward": eval_reward, "step": total_timesteps})
-                    # replay_buffer.save()
+                    replay_buffer.save()
 
                 episode_reward = 0
                 episode_timesteps = 0
                 episode_num += 1
 
-        reward, done = runner.next_step(episode_timesteps)
+        reward, done = runner.next_step(episode_timesteps, EXPLORE_NOISE)
         episode_reward += reward
 
         episode_timesteps += 1
@@ -489,7 +489,7 @@ def train(agent, env, replay_buffer, runner):
 
 ENV = "RoboschoolHalfCheetah-v1"  # "Pendulum-v0"
 SEED = 0
-OBSERVATION = 10000     # 10000
+OBSERVATION = 3000     # 10000
 EXPLORATION = 1000000
 BATCH_SIZE = 100
 GAMMA = 0.99
