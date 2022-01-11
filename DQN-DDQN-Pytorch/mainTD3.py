@@ -449,7 +449,7 @@ def train(agent, env, replay_buffer, runner):
                 if best_avg < avg_reward:
                     best_avg = avg_reward
                     print("saving best model....\n")
-                    agent.save("best_avg", "saves")
+                    agent.save("best_avg"+str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]), "saves")
 
                 print("\rTotal T: {:d} Episode Num: {:d} Reward: {:f} Avg Reward: {:f}".format(
                     total_timesteps, episode_num, episode_reward, avg_reward), end="")
@@ -471,7 +471,7 @@ def train(agent, env, replay_buffer, runner):
                     if best_avg < eval_reward:
                         best_avg = eval_reward
                         print("saving best model....\n")
-                        agent.save("best_avg", "saves")
+                        agent.save("best_avg"+str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]), "saves")
 
                     wandb.log({"reward": eval_reward, "step": total_timesteps})
                     replay_buffer.save()
