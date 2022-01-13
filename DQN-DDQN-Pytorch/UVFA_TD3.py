@@ -140,13 +140,14 @@ def evaluate_policy(policy, env, eval_episodes=100, render=False):
     """
 
     avg_reward = 0.
-    for i in range(eval_episodes):
+    for i in tqdm(range(eval_episodes)):
         obs = env.reset()
         done = False
         while env.curr_path_length < env.max_path_length:
             if render:
                 env.render()
-            action = policy.select_action(np.array(obs), goal=torch.Tensor([EVAL_GOAL_X, EVAL_GOAL_Y]), noise=0)
+            g = torch.Tensor([EVAL_GOAL_X, EVAL_GOAL_Y]).to(device)
+            action = policy.select_action(np.array(obs), goal=g, noise=0)
             obs, reward, done, _ = env.step(action)
             avg_reward += reward
 
@@ -158,6 +159,9 @@ def evaluate_policy(policy, env, eval_episodes=100, render=False):
     return avg_reward
 
 class UVFA_actor_agent(object):
+    def __init__(self, env):
+        self.env = env
+
     def select_action(self, state, goal=None, noise=0.1):
         """Select an appropriate action from the agent policy
 
@@ -172,11 +176,11 @@ class UVFA_actor_agent(object):
 
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
 
-        action = torch.mul(goal_MLP(goal), state_MLP(state)).flatten()
+        action = torch.mul(goal_MLP(goal), state_MLP(state)).cpu().data.numpy().flatten()
         if noise != 0:
             action = (action + np.random.normal(0, noise, size=self.env.action_space.shape[0]))
 
-        return action.clip(self.env.action_space.low, self.env.action_space.high)
+        return action.clip(-1, 1)
 
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -189,6 +193,7 @@ target_actor3.load('models/best_avg0.07_0.86_actor.pth')
 target_actor4.load('models/best_avg0.07_0.89_actor.pth')
 target_actors = [target_actor1,target_actor2,target_actor3,target_actor4 ]
 for a in target_actors:
+    a.to(device)
     a.eval()
 
 r1, r2, r3, r4 = ReplayBuffer(), ReplayBuffer(), ReplayBuffer(), ReplayBuffer()
@@ -212,10 +217,10 @@ wandb.watch(state_MLP, log_freq=10000)
 
 iterations = 1000000
 batch_size = 100
-eval_freq = 200
+eval_freq = 50
 best_avg = -200000
 goals = [[-0.09, 0.86], [-0.09, 0.89], [0.07, 0.86], [0.07, 0.89]]
-EVAL_GOAL_X, EVAL_GOAL_Y = 0.00, 0.87
+EVAL_GOAL_X, EVAL_GOAL_Y = 0.02, 0.88 # eval 0.00, 0.87
 
 SEED = 0
 mt1 = metaworld.MT1('button-press-v2')  # Construct the benchmark, sampling tasks
@@ -228,40 +233,46 @@ env.seed(SEED)
 torch.manual_seed(SEED)
 np.random.seed(SEED)
 
-eval_agent = UVFA_actor_agent()
+eval_agent = UVFA_actor_agent(env)
 
-for it in range(iterations):
-    for goal_idx in range(4):
-        #         goal_idx = 3
-        goal = torch.Tensor(goals[goal_idx])
-        s, a, next_s, r, d = replay_buffers[goal_idx].sample(batch_size)
-        #         print(s)
-        loss = 0
-        for state in s:
-            ss = torch.Tensor(state)
-            #             print(ss, ss.shape)
-            target_action = target_actors[goal_idx](ss)
-            #         print(target_action)
-            pred_action = torch.mul(goal_MLP(goal), state_MLP(ss))
+# test code (comment for training)
+state_MLP.load_state_dict(torch.load('saves/best_stateMLP0.0_0.87'))
+goal_MLP.load_state_dict(torch.load('saves/best_goalMLP0.0_0.87'))
+eval_reward = evaluate_policy(eval_agent, env)
 
-            loss += F.mse_loss(pred_action, target_action)
-        print("loss:", loss.item())
-        wandb.log({"loss": loss.item(), "step": it})
-
-        goal_MLP.zero_grad()
-        state_MLP.zero_grad()
-
-        loss.backward()
-
-        goal_optimizer.step()
-        state_optimizer.step()
-
-    if it % eval_freq == 0:
-        eval_reward = evaluate_policy(eval_agent, env)
-        if best_avg < eval_reward:
-            best_avg = eval_reward
-            print("saving best model....\n")
-            state_MLP.save("best_stateMLP" + str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]), "saves")
-            goal_MLP.save("best_goalMLP" + str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]), "saves")
-        wandb.log({"uvfa eval reward": eval_reward, "step": it})
+# train code (comment for test)
+# for it in range(iterations):
+#     for goal_idx in range(4):
+#         #         goal_idx = 3
+#         goal = torch.Tensor(goals[goal_idx]).to(device)
+#         s, a, next_s, r, d = replay_buffers[goal_idx].sample(batch_size)
+#         #         print(s)
+#         loss = 0
+#         for state in s:
+#             ss = torch.Tensor(state).to(device)
+#             #             print(ss, ss.shape)
+#             target_action = target_actors[goal_idx](ss)
+#             #         print(target_action)
+#             pred_action = torch.mul(goal_MLP(goal), state_MLP(ss))
+#
+#             loss += F.mse_loss(pred_action, target_action)
+#         print("loss:", loss.item())
+#         wandb.log({"loss": loss.item(), "step": it})
+#
+#         goal_MLP.zero_grad()
+#         state_MLP.zero_grad()
+#
+#         loss.backward()
+#
+#         goal_optimizer.step()
+#         state_optimizer.step()
+#
+#     if it % eval_freq == 0:
+#         eval_reward = evaluate_policy(eval_agent, env)
+#         if best_avg < eval_reward:
+#             best_avg = eval_reward
+#             print("saving best model....\n")
+#             torch.save(state_MLP.state_dict(), "saves/best_stateMLP" + str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]))
+#             torch.save(goal_MLP.state_dict(), "saves/best_goalMLP" + str(env._last_rand_vec[0]) + '_' + str(env._last_rand_vec[1]))
+#         wandb.log({"uvfa eval reward": eval_reward, "step": it})
 
